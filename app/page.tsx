@@ -45,7 +45,7 @@ export default function Home() {
     setBusy(true); setNotice("");
     try {
       const { data: current } = await supabase.auth.getSession();
-      let user = current.session?.user;
+      let user: any = current.session?.user;
       if (!user) {
         const { data, error } = await supabase.auth.signInAnonymously({ options: { data: { username: clean } } });
         if (error) throw error;
