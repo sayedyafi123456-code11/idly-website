@@ -15,7 +15,7 @@ export default function Home() {
   const [query,setQuery] = useState("");
   const [tab,setTab] = useState("discover");
   const [authMode,setAuthMode] = useState<"login"|"signup">("signup");
-  const [email,setEmail] = useState(""); const [password,setPassword] = useState("");
+  const [email,setEmail] = useState(""); const [otp,setOtp] = useState(""); const [otpSent,setOtpSent] = useState(false);
   const [name,setName] = useState(""); const [bio,setBio] = useState("");
   const [notice,setNotice] = useState(""); const [busy,setBusy] = useState(false);
   const [aiInput,setAiInput] = useState(""); const [aiReply,setAiReply] = useState("");
@@ -41,14 +41,34 @@ export default function Home() {
   async function authenticate() {
     if (!supabase) return setNotice("Setup needed: connect Supabase using the README instructions.");
     setBusy(true); setNotice("");
-    const result = authMode==="signup" ? await supabase.auth.signUp({email,password}) : await supabase.auth.signInWithPassword({email,password});
-    if (result.error) setNotice(result.error.message);
-    else if (authMode==="signup" && result.data.user) {
-      const code = "ID"+Math.random().toString(36).slice(2,8).toUpperCase();
-      const {error} = await supabase.from("profiles").insert({user_id:result.data.user.id,code,display_name:name || email.split("@")[0],bio,is_public:true});
-      if(error) setNotice(error.message); else setNotice("Account created. Check your email if confirmation is enabled.");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { shouldCreateUser: authMode === "signup" }
+    });
+    if (error) setNotice(error.message);
+    else { setOtpSent(true); setNotice("A login code has been sent to your email. Check your inbox."); }
+    setBusy(false);
+  }
+  async function verifyEmailCode() {
+    if (!supabase) return setNotice("Setup needed: connect Supabase using the README instructions.");
+    setBusy(true); setNotice("");
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: email.trim(), token: otp.trim(), type: "email"
+    });
+    if (error) { setNotice(error.message); setBusy(false); return; }
+    if (authMode === "signup" && data.user) {
+      const { data: existing } = await supabase.from("profiles").select("user_id").eq("user_id", data.user.id).maybeSingle();
+      if (!existing) {
+        const code = "ID" + Math.random().toString(36).slice(2,8).toUpperCase();
+        const { error: profileError } = await supabase.from("profiles").insert({
+          user_id: data.user.id, code, display_name: name || email.split("@")[0], bio, is_public: true
+        });
+        if (profileError) setNotice(profileError.message);
+        else setNotice("Your IDLY account is ready!");
+      } else setNotice("Welcome back!");
     } else setNotice("Welcome back!");
-    setBusy(false); await load();
+    setBusy(false);
+    await load();
   }
   async function saveProfile() {
     if(!supabase || !session?.user) return;
@@ -84,11 +104,12 @@ export default function Home() {
   const admin = isAdmin(session?.user?.email);
   const nav=[["discover","Discover",Search],["profile","My profile",UserRound],["messages","Messages",MessageCircle],["notifications","Notifications",Bell],["ai","IDLY AI",Sparkles],["about","About IDLY",Info],...(admin?[["admin","Admin",ShieldCheck] as any]:[])];
   if(!session) return <main className="authShell"><div className="authCard"><div className="brand"><span className="brandIcon">i</span><span>IDLY</span></div><p className="eyebrow">YOUR CODE. YOUR DETAILS.</p><h1>{authMode==="signup"?"Find your space.":"Welcome back."}</h1><p className="muted">A profile community built around consent, connection and helpful AI.</p>
-    {authMode==="signup" && <input placeholder="Your display name" value={name} onChange={e=>setName(e.target.value)}/>}
-    <input type="email" placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)}/><input type="password" placeholder="Password (at least 8 characters)" value={password} onChange={e=>setPassword(e.target.value)}/>
-    <button className="primary full" disabled={busy||!email||password.length<8||(authMode==="signup"&&!name)} onClick={authenticate}>{busy?"Please wait…":authMode==="signup"?"Create account":"Sign in"}</button>
-    <p className="switch">{authMode==="signup"?"Already have an account?":"New to IDLY?"} <button className="link" onClick={()=>setAuthMode(authMode==="signup"?"login":"signup")}>{authMode==="signup"?"Sign in":"Create account"}</button></p>
-    <p className="tiny"><LockKeyhole size={13}/> Your profile is yours to control. Never share passwords or sensitive identity documents.</p><p className="tiny">IDLY — Developed by Yafi and Team.</p>{notice&&<p className="notice">{notice}</p>}</div><div className="authAside"><div className="orb"></div><p className="eyebrow">MEET THE NEXT YOU</p><h2>Your people.<br/>Your profile.<br/><span>Your IDLY.</span></h2><p>One unique code makes your public profile easy to find — only the details you choose to share.</p><div className="floatingTag"><Sparkles size={16}/> AI-powered profile help</div></div></main>;
+    {authMode==="signup" && !otpSent && <input placeholder="Your display name" value={name} onChange={e=>setName(e.target.value)}/>}
+    <input type="email" placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)} disabled={otpSent}/>
+    {otpSent && <input inputMode="numeric" autoComplete="one-time-code" placeholder="Enter the email code" value={otp} onChange={e=>setOtp(e.target.value)}/>}
+    {!otpSent ? <button className="primary full" disabled={busy||!email.includes("@")||(authMode==="signup"&&!name.trim())} onClick={authenticate}>{busy?"Please wait…": "Send email code"}</button> : <><button className="primary full" disabled={busy||otp.trim().length<6} onClick={verifyEmailCode}>{busy?"Verifying…":"Verify code and continue"}</button><button className="link" onClick={()=>{setOtpSent(false);setOtp("");setNotice("");}}>Change email / resend code</button></>}
+    <p className="switch">{authMode==="signup"?"Already have an account?":"New to IDLY?"} <button className="link" onClick={()=>{setAuthMode(authMode==="signup"?"login":"signup");setOtpSent(false);setOtp("");setNotice("");}}>{authMode==="signup"?"Sign in":"Create account"}</button></p>
+    <p className="tiny"><LockKeyhole size={13}/> Password-free sign-in. Never share your email verification code with anyone.</p><p className="tiny">IDLY — Developed by Yafi and Team.</p>{notice&&<p className="notice">{notice}</p>}</div><div className="authAside"><div className="orb"></div><p className="eyebrow">MEET THE NEXT YOU</p><h2>Your people.<br/>Your profile.<br/><span>Your IDLY.</span></h2><p>One unique code makes your public profile easy to find — only the details you choose to share.</p><div className="floatingTag"><Sparkles size={16}/> AI-powered profile help</div></div></main>;
 
   return <main className="appShell"><aside className={mobileOpen?"sidebar open":"sidebar"}><div className="brand"><span className="brandIcon">i</span>IDLY</div><div className="sideLabel">WORKSPACE</div>{nav.map(([id,label,Icon]:any)=><button key={id} className={tab===id?"navItem active":"navItem"} onClick={()=>{setTab(id);setMobileOpen(false)}}><Icon size={18}/>{label}{id==="notifications"&&notifications.some(n=>!n.read)&&<i/>}</button>)}<div className="sideBottom"><div className="miniProfile"><div className="avatar">{(profile?.display_name||email||"I")[0].toUpperCase()}</div><div><b>{profile?.display_name||session.user.email}</b><small>{profile?.code||"Create your profile"}</small></div></div><button className="navItem" onClick={async()=>{await supabase?.auth.signOut();setSession(null)}}><LogOut size={18}/>Sign out</button></div></aside>
   <section className="mainArea"><header className="topbar"><button className="iconBtn mobileMenu" onClick={()=>setMobileOpen(!mobileOpen)}>{mobileOpen?<X/>:<Menu/>}</button><div><span className="eyebrow">IDLY COMMUNITY</span><h2>{nav.find((n:any)=>n[0]===tab)?.[1]||"Dashboard"}</h2></div><div className="topActions"><span className="onlineDot"/> <span className="muted">You're in control</span><div className="avatar small">{(profile?.display_name||"I")[0].toUpperCase()}</div></div></header>
