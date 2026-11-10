@@ -15,7 +15,7 @@ export default function Home() {
   const [query,setQuery] = useState("");
   const [tab,setTab] = useState("discover");
   const [authMode,setAuthMode] = useState<"login"|"signup">("signup");
-  const [email,setEmail] = useState(""); const [otp,setOtp] = useState(""); const [otpSent,setOtpSent] = useState(false);
+  const [username,setUsername] = useState("");
   const [name,setName] = useState(""); const [bio,setBio] = useState("");
   const [notice,setNotice] = useState(""); const [busy,setBusy] = useState(false);
   const [aiInput,setAiInput] = useState(""); const [aiReply,setAiReply] = useState("");
@@ -39,36 +39,33 @@ export default function Home() {
   const filtered = useMemo(()=>profiles.filter(p => (p.display_name+" "+p.code+" "+(p.bio||"")).toLowerCase().includes(query.toLowerCase())),[profiles,query]);
 
   async function authenticate() {
-    if (!supabase) return setNotice("Setup needed: connect Supabase using the README instructions.");
+    if (!supabase) return setNotice("IDLY setup is incomplete. Please try again later.");
+    const clean = username.trim();
+    if (!/^[a-zA-Z0-9_.]{3,24}$/.test(clean)) return setNotice("Username must be 3–24 characters (letters, numbers, . or _).");
     setBusy(true); setNotice("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { shouldCreateUser: authMode === "signup" }
-    });
-    if (error) setNotice(error.message);
-    else { setOtpSent(true); setNotice("A login code has been sent to your email. Check your inbox."); }
-    setBusy(false);
-  }
-  async function verifyEmailCode() {
-    if (!supabase) return setNotice("Setup needed: connect Supabase using the README instructions.");
-    setBusy(true); setNotice("");
-    const { data, error } = await supabase.auth.verifyOtp({
-      email: email.trim(), token: otp.trim(), type: "email"
-    });
-    if (error) { setNotice(error.message); setBusy(false); return; }
-    if (authMode === "signup" && data.user) {
-      const { data: existing } = await supabase.from("profiles").select("user_id").eq("user_id", data.user.id).maybeSingle();
+    try {
+      const { data: current } = await supabase.auth.getSession();
+      let user = current.session?.user;
+      if (!user) {
+        const { data, error } = await supabase.auth.signInAnonymously({ options: { data: { username: clean } } });
+        if (error) throw error;
+        user = data.user;
+      }
+      if (!user) throw new Error("Could not start your IDLY session.");
+      const { data: existing, error: lookupError } = await supabase.from("profiles").select("*").eq("user_id", user.id).maybeSingle();
+      if (lookupError) throw lookupError;
       if (!existing) {
         const code = "ID" + Math.random().toString(36).slice(2,8).toUpperCase();
-        const { error: profileError } = await supabase.from("profiles").insert({
-          user_id: data.user.id, code, display_name: name || email.split("@")[0], bio, is_public: true
-        });
-        if (profileError) setNotice(profileError.message);
-        else setNotice("Your IDLY account is ready!");
-      } else setNotice("Welcome back!");
-    } else setNotice("Welcome back!");
+        const { error } = await supabase.from("profiles").insert({ user_id: user.id, code, display_name: clean, bio: "", is_public: true });
+        if (error) throw error;
+      } else if (existing.display_name !== clean) {
+        const { error } = await supabase.from("profiles").update({ display_name: clean }).eq("user_id", user.id);
+        if (error) throw error;
+      }
+      setNotice("Welcome to IDLY!");
+      await load();
+    } catch (err:any) { setNotice(err?.message || "Could not sign in."); }
     setBusy(false);
-    await load();
   }
   async function saveProfile() {
     if(!supabase || !session?.user) return;
@@ -103,15 +100,12 @@ export default function Home() {
   }
   const admin = isAdmin(session?.user?.email);
   const nav=[["discover","Discover",Search],["profile","My profile",UserRound],["messages","Messages",MessageCircle],["notifications","Notifications",Bell],["ai","IDLY AI",Sparkles],["about","About IDLY",Info],...(admin?[["admin","Admin",ShieldCheck] as any]:[])];
-  if(!session) return <main className="authShell"><div className="authCard"><div className="brand"><span className="brandIcon">i</span><span>IDLY</span></div><p className="eyebrow">YOUR CODE. YOUR DETAILS.</p><h1>{authMode==="signup"?"Find your space.":"Welcome back."}</h1><p className="muted">A profile community built around consent, connection and helpful AI.</p>
-    {authMode==="signup" && !otpSent && <input placeholder="Your display name" value={name} onChange={e=>setName(e.target.value)}/>}
-    <input type="email" placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)} disabled={otpSent}/>
-    {otpSent && <input inputMode="numeric" autoComplete="one-time-code" placeholder="Enter the email code" value={otp} onChange={e=>setOtp(e.target.value)}/>}
-    {!otpSent ? <button className="primary full" disabled={busy||!email.includes("@")||(authMode==="signup"&&!name.trim())} onClick={authenticate}>{busy?"Please wait…": "Send email code"}</button> : <><button className="primary full" disabled={busy||otp.trim().length<6} onClick={verifyEmailCode}>{busy?"Verifying…":"Verify code and continue"}</button><button className="link" onClick={()=>{setOtpSent(false);setOtp("");setNotice("");}}>Change email / resend code</button></>}
-    <p className="switch">{authMode==="signup"?"Already have an account?":"New to IDLY?"} <button className="link" onClick={()=>{setAuthMode(authMode==="signup"?"login":"signup");setOtpSent(false);setOtp("");setNotice("");}}>{authMode==="signup"?"Sign in":"Create account"}</button></p>
-    <p className="tiny"><LockKeyhole size={13}/> Password-free sign-in. Never share your email verification code with anyone.</p><p className="tiny">IDLY — Developed by Yafi and Team.</p>{notice&&<p className="notice">{notice}</p>}</div><div className="authAside"><div className="orb"></div><p className="eyebrow">MEET THE NEXT YOU</p><h2>Your people.<br/>Your profile.<br/><span>Your IDLY.</span></h2><p>One unique code makes your public profile easy to find — only the details you choose to share.</p><div className="floatingTag"><Sparkles size={16}/> AI-powered profile help</div></div></main>;
+  if(!session) return <main className="authShell"><div className="authCard"><div className="brand"><span className="brandIcon">i</span><span>IDLY</span></div><p className="eyebrow">YOUR CODE. YOUR DETAILS.</p><h1>Welcome to IDLY.</h1><p className="muted">Enter a username to continue.</p>
+    <input autoComplete="username" placeholder="Username" value={username} onChange={e=>setUsername(e.target.value)} onKeyDown={e=>e.key==="Enter"&&authenticate()}/>
+    <button className="primary full" disabled={busy||username.trim().length<3} onClick={authenticate}>{busy?"Please wait…":"Continue"}</button>
+    <p className="tiny"><LockKeyhole size={13}/> Username-only guest access. This does not protect the account or let you recover it on another device.</p><p className="tiny">IDLY — Developed by Yafi and Team.</p>{notice&&<p className="notice">{notice}</p>}</div><div className="authAside"><div className="orb"></div><p className="eyebrow">MEET THE NEXT YOU</p><h2>Your people.<br/>Your profile.<br/><span>Your IDLY.</span></h2><p>One unique code makes your public profile easy to find — only the details you choose to share.</p><div className="floatingTag"><Sparkles size={16}/> AI-powered profile help</div></div></main>;
 
-  return <main className="appShell"><aside className={mobileOpen?"sidebar open":"sidebar"}><div className="brand"><span className="brandIcon">i</span>IDLY</div><div className="sideLabel">WORKSPACE</div>{nav.map(([id,label,Icon]:any)=><button key={id} className={tab===id?"navItem active":"navItem"} onClick={()=>{setTab(id);setMobileOpen(false)}}><Icon size={18}/>{label}{id==="notifications"&&notifications.some(n=>!n.read)&&<i/>}</button>)}<div className="sideBottom"><div className="miniProfile"><div className="avatar">{(profile?.display_name||email||"I")[0].toUpperCase()}</div><div><b>{profile?.display_name||session.user.email}</b><small>{profile?.code||"Create your profile"}</small></div></div><button className="navItem" onClick={async()=>{await supabase?.auth.signOut();setSession(null)}}><LogOut size={18}/>Sign out</button></div></aside>
+  return <main className="appShell"><aside className={mobileOpen?"sidebar open":"sidebar"}><div className="brand"><span className="brandIcon">i</span>IDLY</div><div className="sideLabel">WORKSPACE</div>{nav.map(([id,label,Icon]:any)=><button key={id} className={tab===id?"navItem active":"navItem"} onClick={()=>{setTab(id);setMobileOpen(false)}}><Icon size={18}/>{label}{id==="notifications"&&notifications.some(n=>!n.read)&&<i/>}</button>)}<div className="sideBottom"><div className="miniProfile"><div className="avatar">{(profile?.display_name||username||"I")[0].toUpperCase()}</div><div><b>{profile?.display_name||username}</b><small>{profile?.code||"Create your profile"}</small></div></div><button className="navItem" onClick={async()=>{await supabase?.auth.signOut();setSession(null)}}><LogOut size={18}/>Sign out</button></div></aside>
   <section className="mainArea"><header className="topbar"><button className="iconBtn mobileMenu" onClick={()=>setMobileOpen(!mobileOpen)}>{mobileOpen?<X/>:<Menu/>}</button><div><span className="eyebrow">IDLY COMMUNITY</span><h2>{nav.find((n:any)=>n[0]===tab)?.[1]||"Dashboard"}</h2></div><div className="topActions"><span className="onlineDot"/> <span className="muted">You're in control</span><div className="avatar small">{(profile?.display_name||"I")[0].toUpperCase()}</div></div></header>
   {notice&&<div className="noticeBar">{notice}<button onClick={()=>setNotice("")}>×</button></div>}
   {tab==="discover"&&<div className="content"><div className="hero"><div><span className="eyebrow">YOUR COMMUNITY, YOUR WAY</span><h1>Make meaningful<br/><span>connections.</span></h1><p>Discover public profiles using names or unique IDLY codes.</p></div><div className="heroArt"><div className="heroRing"><UserRound size={56}/></div><span className="artPill">IDLY / CONNECT</span></div></div><div className="sectionHead"><div><h3>Discover people</h3><p className="muted">Search by display name or unique code</p></div><div className="searchBox"><Search size={18}/><input placeholder="Try an IDLY code…" value={query} onChange={e=>setQuery(e.target.value)}/></div></div><div className="profileGrid">{filtered.map(p=><article className="profileCard" key={p.id}><div className="cardTop"><div className="avatar large">{p.display_name[0]?.toUpperCase()}</div><span className="codeTag">{p.code}</span></div><h3>{p.display_name}</h3><p>{p.bio||"This member hasn't added a bio yet."}</p><div className="cardFoot"><span className="publicTag"><span/> Public profile</span><button className="outline smallBtn" onClick={()=>follow(p.user_id)}><Plus size={15}/> Follow</button></div></article>)}{filtered.length===0&&<div className="empty">No public profiles found. Try another name or code.</div>}</div></div>}
